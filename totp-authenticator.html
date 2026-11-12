@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="referrer" content="no-referrer">
+<title>TOTP 验证器 · 本地动态口令生成器</title>
+<!-- 二维码生成库（用于展示/导出账号二维码，离线时降级为文本） -->
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js" onerror="window.__qrGenLibFail=1"></script>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#ffffff; --text:#1f2329; --sub:#6b7280;
+    --border:#e5e7eb; --accent:#2f6fed; --accent-weak:#eaf1fe;
+    --danger:#e5484d; --danger-weak:#fdebec; --ok:#30a46c;
+    --ring-track:#e8ebf0; --radius:14px;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    background:var(--bg);color:var(--text);font-size:15px;line-height:1.55;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:720px;margin:0 auto;padding:28px 18px 60px}
+
+  /* ===== 顶栏 ===== */
+  header.top{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+  .logo{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#2f6fed,#7a5cf0);
+    display:flex;align-items:center;justify-content:center;color:#fff;flex:none}
+  h1{font-size:20px;font-weight:700;letter-spacing:.2px}
+  .sub{color:var(--sub);font-size:12.5px;margin-top:1px}
+  .toolbar{display:flex;gap:8px;margin:18px 0 14px;flex-wrap:wrap;align-items:center}
+  .btn{
+    border:1px solid transparent;background:#f1f2f4;color:var(--text);
+    padding:7px 13px;border-radius:9px;font-size:13px;font-weight:500;cursor:pointer;
+    display:inline-flex;align-items:center;gap:6px;transition:all .15s;user-select:none;
+  }
+  .btn:hover{background:#e6e8ec}
+  .btn.primary{background:var(--accent);color:#fff;box-shadow:0 2px 8px rgba(47,111,237,.22)}
+  .btn.primary:hover{background:#2861d8;box-shadow:0 2px 12px rgba(47,111,237,.32)}
+  .btn.ghost{background:transparent;color:var(--sub)}
+  .btn.ghost:hover{background:#eef0f3;color:var(--text)}
+  .storeinfo{display:none;font-size:12px;color:var(--sub);padding:10px 4px 0}
+  .storeinfo.show{display:block}
+  .btn.danger{background:var(--danger);color:#fff}
+  .btn.danger:hover{background:#d63b40}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn svg{flex:none}
+
+  /* ===== 提示条 ===== */
+  .banner{display:none;padding:10px 14px;border-radius:10px;font-size:13px;margin-bottom:14px;gap:8px;align-items:flex-start}
+  .banner.show{display:flex}
+  .banner.warn{background:#fff7e6;border:1px solid #ffe1a6;color:#8a5b00}
+  .banner.info{background:var(--accent-weak);border:1px solid #cbdcfc;color:#1d4ed8}
+
+  /* ===== 账号列表 ===== */
+  .list{display:flex;flex-direction:column;gap:10px}
+  .acc{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+    padding:14px 16px;display:flex;align-items:center;gap:14px;transition:box-shadow .15s}
+  .acc:hover{box-shadow:0 2px 10px rgba(31,35,41,.06)}
+  .avatar{width:42px;height:42px;border-radius:50%;flex:none;color:#fff;
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:17px}
+  .mid{flex:1;min-width:0}
+  .code{font-family:var(--mono);font-size:26px;font-weight:600;letter-spacing:2px;
+    font-variant-numeric:tabular-nums;cursor:pointer;transition:color .15s;color:#24292f}
+  .code:hover{color:var(--accent)}
+  .code.expired{opacity:.35}
+  .meta{display:flex;align-items:center;gap:8px;margin-top:3px;min-width:0}
+  .name{font-size:13px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .badge{font-size:11px;color:var(--sub);border:1px solid var(--border);border-radius:5px;padding:0 5px;flex:none}
+  .right{display:flex;align-items:center;gap:10px;flex:none;position:relative}
+  .ring{position:relative;width:44px;height:44px;flex:none}
+  .ring svg{transform:rotate(-90deg);display:block}
+  .ring .track{stroke:var(--ring-track)}
+  .ring .bar{stroke:var(--accent);transition:stroke-dashoffset .2s linear;stroke-linecap:round}
+  .ring .bar.low{stroke:var(--danger)}
+  .ring .sec{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    font-size:12px;color:var(--sub);font-variant-numeric:tabular-nums}
+  .iconbtn{width:34px;height:34px;border-radius:9px;border:none;background:transparent;color:var(--sub);
+    cursor:pointer;display:flex;align-items:center;justify-content:center;position:relative}
+  .iconbtn:hover{background:#eef0f3;color:var(--text)}
+  .menu{position:absolute;right:0;top:44px;background:#fff;border:1px solid var(--border);border-radius:10px;
+    box-shadow:0 8px 24px rgba(31,35,41,.12);padding:5px;display:none;z-index:30;min-width:120px}
+  .menu.open{display:block}
+  .menu button{display:flex;width:100%;align-items:center;gap:8px;border:none;background:none;
+    padding:8px 10px;font-size:13px;color:var(--text);cursor:pointer;border-radius:7px;text-align:left}
+  .menu button:hover{background:#f3f4f6}
+  .menu button.delm{color:var(--danger)}
+
+  /* ===== 空状态 ===== */
+  .empty{background:var(--card);border:1px dashed #d3d8de;border-radius:var(--radius);
+    padding:48px 24px;text-align:center;color:var(--sub)}
+  .empty .big{font-size:38px;margin-bottom:10px}
+  .empty p{font-size:13.5px;margin-top:4px}
+
+  /* ===== 弹窗 ===== */
+  .overlay{position:fixed;inset:0;background:rgba(15,20,30,.45);display:none;
+    align-items:flex-start;justify-content:center;z-index:100;padding:36px 14px;overflow:auto}
+  .overlay.open{display:flex}
+  .modal{background:#fff;border-radius:16px;width:100%;max-width:460px;
+    box-shadow:0 20px 60px rgba(15,20,30,.25);animation:pop .18s ease-out}
+  @keyframes pop{from{transform:translateY(10px);opacity:0}to{transform:none;opacity:1}}
+  .mhead{display:flex;align-items:center;justify-content:space-between;padding:16px 20px 0}
+  .mhead h3{font-size:16.5px}
+  .mbody{padding:14px 20px 20px}
+  .field{margin-bottom:13px}
+  .field label{display:block;font-size:12.5px;color:var(--sub);margin-bottom:5px}
+  .field input,.field select,.field textarea{
+    width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:14px;
+    background:#fff;color:var(--text);outline:none;font-family:inherit}
+  .field textarea{font-family:var(--mono);font-size:12.5px;resize:vertical;min-height:76px}
+  .field input:focus,.field textarea:focus,.field select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(47,111,237,.12)}
+  .field .hint{font-size:11.5px;color:#9aa1ab;margin-top:4px}
+  .ferr{display:none;font-size:12.5px;color:var(--danger);margin-top:5px}
+  .ferr.show{display:block}
+  .mfoot{display:flex;justify-content:flex-end;gap:9px;padding:0 20px 18px}
+  .row2{display:flex;gap:10px}
+  .row2 .field{flex:1}
+
+  .divider{display:flex;align-items:center;gap:10px;margin:16px 0 2px;color:var(--sub);font-size:12.5px}
+  .divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--border)}
+
+  .qrcanvas{display:flex;justify-content:center;padding:10px;background:#fff;border:1px solid var(--border);border-radius:10px}
+  .uribox{margin-top:10px}
+  .uribox textarea{min-height:58px;font-size:11px;word-break:break-all}
+
+  /* help */
+  .help h4{font-size:13.5px;margin:16px 0 6px;color:var(--text)}
+  .help p,.help li{font-size:13px;color:var(--sub)}
+  .help ul,.help ol{padding-left:20px}
+  .help li{margin:4px 0}
+  .help code{font-family:var(--mono);font-size:11.5px;background:#f3f4f6;border-radius:4px;padding:1px 5px}
+  .help .kbd-note{background:var(--accent-weak);border-radius:8px;padding:10px 12px;font-size:12.5px;color:#1d4ed8;margin-top:14px}
+
+  /* toast */
+  #toast{position:fixed;left:50%;bottom:36px;transform:translateX(-50%) translateY(20px);
+    background:#1f2329;color:#fff;padding:10px 18px;border-radius:10px;font-size:13.5px;
+    opacity:0;pointer-events:none;transition:all .25s;z-index:200;max-width:86vw;text-align:center}
+  #toast.show{opacity:1;transform:translateX(-50%)}
+
+  .danger-zone{background:var(--danger-weak);border-radius:9px;padding:12px;font-size:13px;color:#b3261e;margin-bottom:14px}
+  .weaknote{font-size:12px;color:#9aa1ab;margin-top:8px}
+  .linkish{color:var(--accent);cursor:pointer;text-decoration:underline;font-size:12.5px;background:none;border:none;padding:0}
+  @media (max-width:480px){
+    .code{font-size:22px}
+    .wrap{padding:18px 12px 40px}
+    .ring{width:38px;height:38px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="logo">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+    </div>
+    <div>
+      <h1>TOTP 验证器</h1>
+      <div class="sub">RFC 6238 · HMAC-SHA1 · 6 位 · 30 秒 · 密钥仅存本地</div>
+    </div>
+  </header>
+
+  <div class="banner warn" id="skewBanner">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex:none;margin-top:1px"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+    <div id="skewText"></div>
+  </div>
+
+  <div class="banner warn" id="legacyBanner">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex:none;margin-top:1px"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+    <div>检测到旧版加密数据但无法读取（可能因浏览器升级或更换设备导致）。数据仍保留、未被删除；若有此前导出的备份，请点「导入」恢复。</div>
+  </div>
+
+  <div class="toolbar">
+    <button class="btn primary" id="btnAdd">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      添加账号
+    </button>
+    <button class="btn" id="btnImport">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+      导入
+    </button>
+    <button class="btn" id="btnExport">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+      导出
+    </button>
+    <button class="btn ghost" id="btnHelp">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+      使用说明
+    </button>
+  </div>
+
+  <div class="list" id="list"></div>
+  <div class="storeinfo" id="storeinfo"></div>
+
+  <div class="empty" id="empty" style="display:none">
+    <div class="big">🔐</div>
+    <div style="font-weight:600;color:var(--text)">还没有账号</div>
+    <p>点击「添加账号」，粘贴平台提供的 otpauth:// 链接（或 Google Authenticator 导出的迁移链接），或手动输入 Base32 密钥</p>
+  </div>
+</div>
+
+<!-- 通用弹窗 -->
+<div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
+<div id="toast"></div>
+
+<noscript><div style="padding:40px;text-align:center">需要启用 JavaScript 才能使用本验证器。</div></noscript>
+
+<script>
+'use strict';
+/* =====================================================================
+ * TOTP 验证器 —— 单文件实现，无后端、无网络上传
+ * 核心算法：SHA-1 / HMAC-SHA1 / Base32 / HOTP / TOTP（已通过 RFC 4226/6238 测试向量）
+ * 存储：localStorage 明文（v3；旧 v2 设备指纹加密数据启动时自动迁移，见使用说明）
+ * ===================================================================== */
+
+/* ---------------- 核心密码学实现 ---------------- */
+function concatBytes(a, b){
+  const r = new Uint8Array(a.length + b.length);
+  r.set(a, 0); r.set(b, a.length);
+  return r;
+}
+
+/** SHA-1（纯 JS 实现，输入 Uint8Array，输出 20 字节摘要） */
+function sha1(msgBytes){
+  const len = msgBytes.length;
+  const bitLenHi = Math.floor(len / 0x20000000) >>> 0;
+  const bitLenLo = (len << 3) >>> 0;
+  const totalLen = (((len + 8) >> 6) + 1) << 6;   // 补齐到 64 字节整数倍分组
+  const buf = new Uint8Array(totalLen);
+  buf.set(msgBytes);
+  buf[len] = 0x80;
+  const dv = new DataView(buf.buffer);
+  dv.setUint32(totalLen - 8, bitLenHi);
+  dv.setUint32(totalLen - 4, bitLenLo);
+  let h0=0x67452301, h1=0xEFCDAB89, h2=0x98BADCFE, h3=0x10325476, h4=0xC3D2E1F0;
+  const w = new Uint32Array(80);
+  for(let off=0; off<totalLen; off+=64){
+    for(let i=0;i<16;i++) w[i] = dv.getUint32(off + i*4);
+    for(let i=16;i<80;i++){
+      const n = w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16];
+      w[i] = ((n << 1) | (n >>> 31)) >>> 0;
+    }
+    let a=h0,b=h1,c=h2,d=h3,e=h4;
+    for(let i=0;i<80;i++){
+      let f,k;
+      if(i<20){ f=(b&c)|((~b)&d); k=0x5A827999; }
+      else if(i<40){ f=b^c^d; k=0x6ED9EBA1; }
+      else if(i<60){ f=(b&c)|(b&d)|(c&d); k=0x8F1BBCDC; }
+      else{ f=b^c^d; k=0xCA62C1D6; }
+      const t = ((((a<<5)|(a>>>27)) + (f>>>0) + (e>>>0) + (k>>>0) + (w[i]>>>0)) >>> 0);
+      e=d; d=c; c=((b<<30)|(b>>>2))>>>0; b=a; a=t;
+    }
+    h0=(h0+a)>>>0; h1=(h1+b)>>>0; h2=(h2+c)>>>0; h3=(h3+d)>>>0; h4=(h4+e)>>>0;
+  }
+  const out = new Uint8Array(20);
+  const odv = new DataView(out.buffer);
+  [h0,h1,h2,h3,h4].forEach((h,i)=>odv.setUint32(i*4,h));
+  return out;
+}
+
+/** HMAC-SHA1（RFC 2104） */
+function hmacSha1(keyBytes, msgBytes){
+  const BLOCK = 64;
+  let k = keyBytes;
+  if(k.length > BLOCK) k = sha1(k);
+  const kp = new Uint8Array(BLOCK); kp.set(k);
+  const ipad = new Uint8Array(BLOCK), opad = new Uint8Array(BLOCK);
+  for(let i=0;i<BLOCK;i++){ ipad[i]=kp[i]^0x36; opad[i]=kp[i]^0x5c; }
+  return sha1(concatBytes(opad, sha1(concatBytes(ipad, msgBytes))));
+}
+
+/** Base32 解码（RFC 4648，容忍小写/空格/连字符/填充） */
+function base32Decode(input){
+  const clean = String(input).toUpperCase().replace(/[\s-]/g,'').replace(/=+$/,'');
+  if(!clean.length) throw new Error('密钥为空');
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits=0, value=0; const out=[];
+  for(const ch of clean){
+    const idx = alphabet.indexOf(ch);
+    if(idx === -1) throw new Error('含非法字符「'+ch+'」（Base32 仅允许 A–Z 与 2–7）');
+    value = (value<<5) | idx;
+    bits += 5;
+    if(bits >= 8){ out.push((value >>> (bits-8)) & 0xff); bits -= 8; }
+  }
+  return new Uint8Array(out);
+}
+function toB64(u8){ let s=''; u8.forEach(x=>s+=String.fromCharCode(x)); return btoa(s); }
+function fromB64(s){ const s2=atob(s); const u=new Uint8Array(s2.length); for(let i=0;i<s2.length;i++)u[i]=s2.charCodeAt(i); return u; }
+
+/** HOTP（RFC 4226）：counter → 6/8 位动态口令 */
+function hotp(keyBytes, counter, digits){
+  digits = digits || 6;
+  const msg = new Uint8Array(8);
+  let c = counter;
+  for(let i=7;i>=0;i--){ msg[i] = c & 0xff; c = Math.floor(c/256); }   // 大端计数器
+  const h = hmacSha1(keyBytes, msg);
+  const off = h[19] & 0x0f;                                            // 动态截断
+  const bin = (((h[off] & 0x7f) << 24) | (h[off+1] << 16) | (h[off+2] << 8) | h[off+3]) >>> 0;
+  return String(bin % (10 ** digits)).padStart(digits,'0');
+}
+
+/** TOTP（RFC 6238）：TOTP = HOTP(K, floor(unixTime / period)) */
+function totpAt(keyBytes, unixTime, period, digits){
+  return hotp(keyBytes, Math.floor(unixTime / period), digits);
+}
+
+/* ---------------- otpauth:// URI 解析与构造 ---------------- */
+function parseOtpauth(uri){
+  let u;
+  try { u = new URL(String(uri).trim()); }
+  catch(e){ throw new Error('URI 格式无法解析'); }
+  if(u.protocol !== 'otpauth:') throw new Error('不是 otpauth:// 链接');
+  const type = (u.hostname || '').toLowerCase();
+  if(type !== 'totp') throw new Error('仅支持 TOTP 类型（链接类型为「'+(type||'未知')+'」）');
+  let label;
+  try { label = decodeURIComponent((u.pathname||'').replace(/^\/+/,'')); }
+  catch(e){ throw new Error('账号名称编码错误'); }
+  const params = u.searchParams;
+  let issuer = (params.get('issuer') || '').trim();
+  let name = label;
+  const ci = label.indexOf(':');
+  if(ci > 0){
+    if(!issuer) issuer = label.slice(0, ci).trim();
+    name = label.slice(ci+1).trim();
+  }
+  if(!name && !issuer) throw new Error('缺少账号名称');
+  const secret = (params.get('secret') || '').trim();
+  if(!secret) throw new Error('链接中缺少 secret 密钥参数');
+  if(!/^[A-Za-z2-7=\s\-]+$/.test(secret)) throw new Error('密钥含非法字符（Base32 仅允许 A–Z 与 2–7）');
+  const algo = (params.get('algorithm') || 'SHA1').toUpperCase();
+  if(algo !== 'SHA1') throw new Error('仅支持 SHA1 算法（链接为 '+algo+'）');
+  let digits = parseInt(params.get('digits') || '6', 10); if(!(digits===6||digits===8)) digits = 6;
+  let period = parseInt(params.get('period') || '30', 10);
+  if(!(period >= 1 && period <= 3600)) period = 30;
+  return { label:name, issuer, secret, digits, period };
+}
+function buildOtpauth(a){
+  const issuerPart = a.issuer ? encodeURIComponent(a.issuer) + ':' : '';
+  const q = new URLSearchParams();
+  q.set('secret', a.secret);
+  if(a.issuer) q.set('issuer', a.issuer);
+  if(a.digits !== 6) q.set('digits', String(a.digits));
+  if(a.period !== 30) q.set('period', String(a.period));
+  return 'otpauth://totp/' + issuerPart + encodeURIComponent(a.label) + '?' + q.toString();
+}
+
+/* ---------------- Google Authenticator 迁移链接 ----------------
+ * otpauth-migration://offline?data=<base64url(raw-deflate(MigrationPayload protobuf))>
+ * protobuf 手写解码：只取 OTPParameters 的 secret(1)/name(2)/issuer(3)/type(4)/digits(6)，
+ * 顶层 version/batch 等字段跳过；HOTP 条目（type=1）不支持，计数跳过。 */
+function readVarint(buf, pos){
+  let result = 0, shift = 0, p = pos;
+  for(;;){
+    if(p >= buf.length) throw new Error('迁移数据不完整');
+    const b = buf[p++];
+    result += (b & 0x7f) * 2 ** shift;
+    if(!(b & 0x80)) break;
+    shift += 7;
+    if(shift > 35) throw new Error('迁移数据损坏');
+  }
+  return [result, p];
+}
+
+function base32Encode(bytes){
+  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = 0, value = 0, out = '';
+  for(const b of bytes){
+    value = (value << 8) | b; bits += 8;
+    while(bits >= 5){ out += A[(value >>> (bits - 5)) & 31]; bits -= 5; }
+  }
+  if(bits > 0) out += A[(value << (5 - bits)) & 31];
+  return out;
+}
+
+function decodeOtpParam(buf){
+  const acc = { label:'', issuer:'', secret:'', digits:6, period:30, type:2 };
+  let pos = 0;
+  while(pos < buf.length){
+    const [tag, p1] = readVarint(buf, pos);
+    const field = tag >> 3, wire = tag & 7;
+    if(wire === 2){
+      const [len, p2] = readVarint(buf, p1);
+      const sub = buf.subarray(p2, p2 + len);
+      if(field === 1) acc.secret = base32Encode(sub);
+      else if(field === 2) acc.label = new TextDecoder().decode(sub);
+      else if(field === 3) acc.issuer = new TextDecoder().decode(sub);
+      pos = p2 + len;
+    }else{
+      const [v, p2] = readVarint(buf, p1);
+      if(field === 4) acc.type = v;
+      else if(field === 6) acc.digits = (v === 8 ? 8 : 6);
+      pos = p2;
+    }
+  }
+  return acc;
+}
+
+function decodeMigration(buf){
+  const items = [];
+  let pos = 0;
+  while(pos < buf.length){
+    const [tag, p1] = readVarint(buf, pos);
+    const field = tag >> 3, wire = tag & 7;
+    if(field === 1 && wire === 2){
+      const [len, p2] = readVarint(buf, p1);
+      items.push(decodeOtpParam(buf.subarray(p2, p2 + len)));
+      pos = p2 + len;
+    }else if(wire === 0){ pos = readVarint(buf, p1)[1]; }
+    else if(wire === 2){ const [len, p2] = readVarint(buf, p1); pos = p2 + len; }
+    else throw new Error('迁移数据格式不受支持');
+  }
+  return items;
+}
+
+async function inflateBytes(bytes, format){
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream(format));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function parseMigration(uri){
+  const m = String(uri).match(/data=([A-Za-z0-9\-_]+)/);
+  if(!m) throw new Error('迁移链接缺少 data 参数');
+  if(typeof DecompressionStream === 'undefined') throw new Error('当前浏览器过旧，不支持解压迁移数据');
+  const b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
+  const bytes = fromB64(b64 + '='.repeat((4 - b64.length % 4) % 4));
+  let inflated;
+  try{ inflated = await inflateBytes(bytes, 'deflate-raw'); }
+  catch(e){ inflated = await inflateBytes(bytes, 'deflate'); }   // 兼容个别实现带 zlib 头
+  const raw = decodeMigration(inflated);
+  const items = [];
+  let skippedHotp = 0;
+  for(const r of raw){
+    if(r.type !== 2){ skippedHotp++; continue; }   // 仅 TOTP
+    let label = r.label, issuer = r.issuer;
+    const ci = label.indexOf(':');
+    if(ci > 0){ if(!issuer) issuer = label.slice(0, ci).trim(); label = label.slice(ci + 1).trim(); }
+    items.push({ label, issuer, secret: r.secret, digits: r.digits, period: 30 });
+  }
+  return { items, skippedHotp };
+}
+
+/* ---------------- 本地存储 ----------------
+ * v3：明文 JSON。历史 v2 曾用设备指纹派生密钥加密，但 UA / 屏幕分辨率
+ * 任何变化（浏览器升级、插拔显示器）都会解密失败，且失败后的下一次
+ * 保存会覆盖旧密文导致密钥永久丢失——混淆级防护换不来这种风险。
+ * 备份安全由「导出」的口令加密（PBKDF2 + AES-GCM）承担。 */
+const STORE_KEY = 'totp-authenticator-store-v3';
+const LEGACY_V2_KEY = 'totp-authenticator-store-v2';
+const LEGACY_SALT_KEY = 'totp-authenticator-salt';
+const LEGACY_V1_KEY = 'totp-accounts';
+
+let legacyLocked = false;   // 旧 v2 密文存在但解不开 → 顶部横幅提示，原数据保留不删
+
+async function saveAccounts(accounts){
+  localStorage.setItem(STORE_KEY, JSON.stringify({ v:3, accounts }));
+}
+
+/** 仅迁移用：按 v2 方式（设备指纹 PBKDF2→AES-GCM）解密旧密文 */
+async function legacyDecrypt(obj){
+  const fp = [
+    navigator.userAgent, navigator.language,
+    (screen ? screen.width+'x'+screen.height+'x'+(screen.colorDepth||0) : ''),
+    new Date().getTimezoneOffset(),
+    navigator.hardwareConcurrency || 0,
+    navigator.platform || ''
+  ].join('|');
+  const base = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(fp));
+  const material = await crypto.subtle.importKey('raw', base, 'PBKDF2', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey(
+    { name:'PBKDF2', salt: fromB64(obj.salt), iterations:210000, hash:'SHA-256' },
+    material, { name:'AES-GCM', length:256 }, false, ['decrypt']
+  );
+  return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM', iv:fromB64(obj.iv)}, key, fromB64(obj.data)));
+}
+
+async function loadAccounts(){
+  const raw = localStorage.getItem(STORE_KEY);
+  if(raw){
+    try{ const o = JSON.parse(raw); if(Array.isArray(o.accounts)) return o.accounts; }catch(e){}
+  }
+  // v1 明文 → 直接迁移
+  const v1 = localStorage.getItem(LEGACY_V1_KEY);
+  if(v1){
+    try{ const arr = JSON.parse(v1); if(Array.isArray(arr)){ await saveAccounts(arr); localStorage.removeItem(LEGACY_V1_KEY); return arr; } }catch(e){}
+  }
+  // v2 密文 → 解密迁移；解不开则原样保留并提示（绝不删除，新数据另存 v3，也不会覆盖它）
+  const v2 = localStorage.getItem(LEGACY_V2_KEY);
+  if(!v2) return [];
+  try{
+    const obj = JSON.parse(v2);
+    let arr;
+    if(obj && obj.plain && Array.isArray(obj.accounts)) arr = obj.accounts;   // 旧版无 crypto 降级数据
+    else arr = JSON.parse(new TextDecoder().decode(await legacyDecrypt(obj)));
+    if(Array.isArray(arr)){
+      await saveAccounts(arr);
+      localStorage.removeItem(LEGACY_V2_KEY);
+      localStorage.removeItem(LEGACY_SALT_KEY);
+      return arr;
+    }
+  }catch(e){ legacyLocked = true; }
+  return [];
+}
+
+/* ---------------- 应用状态 ---------------- */
+let accounts = [];          // [{id,label,issuer,secret,digits,period,createdAt}]
+let cacheKeyBytes = new Map();   // id -> Uint8Array（解码后的密钥）
+let lastCounter = new Map();     // id -> 上次已渲染的计数器
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s??'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function uid(){ return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,8); }
+function sameName(a,b){
+  return (a.issuer||'').trim().toLowerCase() === (b.issuer||'').trim().toLowerCase()
+      && (a.label||'').trim().toLowerCase()  === (b.label||'').trim().toLowerCase();
+}
+function findDup(acc, exceptId){
+  return accounts.find(x => x.id !== exceptId && sameName(x, acc));
+}
+function displayName(a){ return a.issuer ? a.issuer + ' · ' + a.label : a.label; }
+function colorOf(str){
+  let h = 0; for(const ch of String(str||'x')) h = (h*31 + ch.charCodeAt(0)) >>> 0;
+  return 'hsl(' + (h % 360) + ',62%,46%)';
+}
+
+function toast(msg){
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toast._tm);
+  toast._tm = setTimeout(()=>t.classList.remove('show'), 1800);
+}
+
+async function copyText(text, tip){
+  try{
+    await navigator.clipboard.writeText(text);
+    toast(tip || ('已复制：' + text));
+  }catch(e){
+    // 非安全上下文降级方案
+    try{
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      toast(tip || ('已复制：' + text));
+    }catch(e2){ toast('复制失败，请手动记录'); }
+  }
+}
+
+/* ---------------- 列表渲染与刷新循环 ---------------- */
+function keyBytesOf(a){
+  if(!cacheKeyBytes.has(a.id)) cacheKeyBytes.set(a.id, base32Decode(a.secret));
+  return cacheKeyBytes.get(a.id);
+}
+
+function renderList(){
+  const list = $('#list'), empty = $('#empty');
+  list.innerHTML = '';
+  empty.style.display = accounts.length ? 'none' : 'block';
+  const si = $('#storeinfo');
+  si.textContent = accounts.length + ' 个账号 · 密钥仅存本机浏览器 localStorage，可随时「导出」加密备份';
+  si.classList.toggle('show', !!accounts.length);
+  const sorted = [...accounts].sort((x,y)=>displayName(x).localeCompare(displayName(y),'zh'));
+  for(const a of sorted){
+    const el = document.createElement('div');
+    el.className = 'acc'; el.dataset.id = a.id;
+    const initial = (a.issuer || a.label || '?').trim().charAt(0).toUpperCase() || '?';
+    const C = 2 * Math.PI * 17;   // r=17
+    el.innerHTML =
+      '<div class="avatar" style="background:'+colorOf(a.issuer||a.label)+'">'+esc(initial)+'</div>'+
+      '<div class="mid">'+
+        '<div class="code" id="code-'+a.id+'" title="点击复制验证码">------</div>'+
+        '<div class="meta">'+
+          '<span class="name" title="'+esc(displayName(a))+'">'+esc(displayName(a))+'</span>'+
+          (a.digits!==6 ? '<span class="badge">'+a.digits+'位</span>' : '')+
+          (a.period!==30 ? '<span class="badge">'+a.period+'s</span>' : '')+
+        '</div>'+
+      '</div>'+
+      '<div class="right">'+
+        '<div class="ring" title="剩余有效期">'+
+          '<svg width="44" height="44" viewBox="0 0 44 44">'+
+            '<circle class="track" cx="22" cy="22" r="17" fill="none" stroke-width="4"/>'+
+            '<circle class="bar" id="bar-'+a.id+'" cx="22" cy="22" r="17" fill="none" stroke-width="4" stroke-dasharray="'+C.toFixed(1)+'" stroke-dashoffset="0"/>'+
+          '</svg>'+
+          '<div class="sec" id="sec-'+a.id+'">--</div>'+
+        '</div>'+
+        '<button class="iconbtn" data-copy="'+a.id+'" title="复制验证码">'+
+          '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'+
+        '</button>'+
+        '<button class="iconbtn" data-menu="'+a.id+'" title="更多操作">'+
+          '<svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>'+
+        '</button>'+
+        '<div class="menu" id="menu-'+a.id+'">'+
+          '<button data-act="qr">显示二维码</button>'+
+          '<button data-act="uri">复制 otpauth 链接</button>'+
+          '<button data-act="rename">重命名</button>'+
+          '<button data-act="del" class="delm">删除账号</button>'+
+        '</div>'+
+      '</div>';
+    list.appendChild(el);
+    $('#code-'+a.id).addEventListener('click', ()=>copyCode(a.id));
+  }
+  tick(true);
+}
+
+function tick(force){
+  const now = Math.floor(Date.now()/1000);
+  for(const a of accounts){
+    const counter = Math.floor(now / a.period);
+    if(force || lastCounter.get(a.id) !== counter){
+      lastCounter.set(a.id, counter);
+      let code, ok = true;
+      try{ code = hotp(keyBytesOf(a), counter, a.digits); }
+      catch(e){ code = '—— 出错 ——'; ok = false; }
+      const codeEl = document.getElementById('code-'+a.id);
+      if(codeEl){
+        codeEl.textContent = ok ? (code.slice(0,3)+' '+code.slice(3)) : code;
+        codeEl.classList.toggle('expired', !ok);
+      }
+    }
+    const remain = a.period - (now % a.period);
+    const C = 2 * Math.PI * 17;
+    const bar = document.getElementById('bar-'+a.id);
+    const sec = document.getElementById('sec-'+a.id);
+    if(bar){
+      bar.style.strokeDashoffset = (C * (1 - remain/a.period)).toFixed(1);
+      bar.classList.toggle('low', remain <= 5);
+    }
+    if(sec) sec.textContent = remain;
+  }
+}
+setInterval(tick, 250);
+
+/* ---------------- 时间偏差检测 ---------------- */
+let skewSeconds = null;
+async function checkTimeSkew(manual){
+  try{
+    const t0 = Date.now();
+    const res = await fetch('https://www.baidu.com/', { method:'HEAD', cache:'no-store' });
+    const dateHdr = res.headers && res.headers.get('date');
+    if(!dateHdr){ if(manual) toast('未能获取标准时间'); return; }
+    const rtt = Date.now() - t0;
+    const serverMs = new Date(dateHdr).getTime() + rtt/2;
+    skewSeconds = Math.round((Date.now() - serverMs)/1000);
+    const b = $('#skewBanner'), t = $('#skewText');
+    if(Math.abs(skewSeconds) >= 5){
+      b.classList.add('show');
+      t.innerHTML = '检测到本机时间与标准时间相差约 <b>' + skewSeconds + ' 秒</b>，生成的验证码可能被服务端判定无效。' +
+        '请校准系统时间（macOS：设置 → 通用 → 日期与时间；Windows：设置 → 时间和语言 → 自动设置时间）。' +
+        '<button class="linkish" style="margin-left:6px" onclick="checkTimeSkew(true)">重新检测</button>';
+    }else{
+      b.classList.remove('show');
+      if(manual) toast('时间同步正常（偏差 ' + skewSeconds + ' 秒内）');
+    }
+  }catch(e){
+    if(manual) toast('网络不可用，无法校验时间');
+  }
+}
+window.checkTimeSkew = checkTimeSkew;
+
+/* ---------------- 弹窗框架 ---------------- */
+function openModal(html){ $('#modal').innerHTML = html; $('#overlay').classList.add('open'); }
+function closeModal(){ $('#overlay').classList.remove('open'); $('#modal').innerHTML=''; }
+$('#overlay').addEventListener('click', e => { if(e.target === $('#overlay')) closeModal(); });
+document.addEventListener('keydown', e => { if(e.key === 'Escape') closeModal(); });
+
+function fieldErr(input, msg){
+  const err = input.closest('.field') && input.closest('.field').querySelector('.ferr');
+  if(err){ err.textContent = msg; err.classList.add('show'); }
+  input.style.borderColor = 'var(--danger)';
+}
+function clearErr(form){
+  form.querySelectorAll('.ferr').forEach(x=>x.classList.remove('show'));
+  form.querySelectorAll('input,textarea,select').forEach(x=>x.style.borderColor='');
+}
+
+/* ---------------- 添加账号（粘贴链接 / 手动） ---------------- */
+function openAddModal(){
+  openModal(
+    '<div class="mhead"><h3>添加账号</h3><button class="btn ghost" data-close>✕</button></div>'+
+    '<div class="mbody">'+
+      '<div class="field"><label>粘贴链接（otpauth:// 或 Google Authenticator 导出的 otpauth-migration://，支持多行批量）</label>'+
+        '<textarea id="pasteUri" placeholder="otpauth://totp/GitHub:user%40example.com?secret=JBSWY3DPEHPK3PXP&issuer=GitHub"></textarea>'+
+        '<div class="ferr" id="err-paste"></div></div>'+
+      '<button class="btn primary" id="btnParseUri" style="width:100%;justify-content:center">解析并添加</button>'+
+      '<div class="divider">或手动输入</div>'+
+      '<form id="manualForm">'+
+        '<div class="field"><label>账号名称 *</label>'+
+          '<input id="mLabel" placeholder="例如 user@example.com" autocomplete="off">'+
+          '<div class="ferr" id="err-mLabel"></div></div>'+
+        '<div class="field"><label>平台 / 发行方（可选，便于区分）</label>'+
+          '<input id="mIssuer" placeholder="例如 GitHub、Google、公司VPN" autocomplete="off"></div>'+
+        '<div class="field"><label>Base32 密钥 *</label>'+
+          '<input id="mSecret" placeholder="例如 JBSWY3DPEHPK3PXP" autocomplete="off" spellcheck="false" style="font-family:var(--mono)">'+
+          '<div class="hint">通常由服务方提供，只含 A–Z 和 2–7，空格可省略</div>'+
+          '<div class="ferr" id="err-mSecret"></div></div>'+
+        '<div class="row2">'+
+          '<div class="field"><label>位数</label><select id="mDigits"><option value="6" selected>6 位（标准）</option><option value="8">8 位</option></select></div>'+
+          '<div class="field"><label>周期（秒）</label><select id="mPeriod"><option value="30" selected>30 秒（标准）</option><option value="60">60 秒</option></select></div>'+
+        '</div>'+
+        '<button type="submit" class="btn primary" style="width:100%;justify-content:center">添加账号</button>'+
+      '</form>'+
+    '</div>'
+  );
+
+  $('#modal [data-close]').addEventListener('click', closeModal);
+
+  // 手动表单
+  $('#manualForm').addEventListener('submit', e=>{
+    e.preventDefault();
+    clearErr(e.target);
+    const label = $('#mLabel').value.trim();
+    const issuer = $('#mIssuer').value.trim();
+    const secret = $('#mSecret').value.trim();
+    let ok = true;
+    if(!label){ fieldErr($('#mLabel'), '请输入账号名称'); ok = false; }
+    let keyLen = 0;
+    try{
+      keyLen = base32Decode(secret).length;
+      if(keyLen < 8){ fieldErr($('#mSecret'), '密钥过短（解码后仅 '+keyLen+' 字节，标准为 20 字节 / 32 个字符），请核对'); ok = false; }
+    }catch(err){ fieldErr($('#mSecret'), '密钥无效：' + err.message); ok = false; }
+    if(!ok) return;
+    if(findDup({label, issuer})){
+      fieldErr($('#mLabel'), '账号已存在（同名平台 + 同名账号），请先重命名或删除原账号');
+      return;
+    }
+    addAccount({ label, issuer, secret, digits:+$('#mDigits').value, period:+$('#mPeriod').value });
+  });
+
+  // 粘贴解析：otpauth 多行批量 / GA 迁移链接单条
+  $('#btnParseUri').addEventListener('click', async ()=>{
+    const errEl = $('#err-paste'); errEl.classList.remove('show');
+    $('#pasteUri').style.borderColor = '';
+    const text = $('#pasteUri').value.trim();
+    if(!text){ fieldErr($('#pasteUri'), '请先粘贴链接'); return; }
+    let items = [], skippedHotp = 0;
+    try{
+      if(/^otpauth-migration:/i.test(text)){
+        const r = await parseMigration(text);
+        items = r.items; skippedHotp = r.skippedHotp;
+      }else{
+        for(const line of text.split(/[\n\r]+/)){
+          const L = line.trim();
+          if(L) items.push(parseOtpauth(L));
+        }
+      }
+    }catch(err){
+      errEl.textContent = '解析失败：' + err.message;
+      errEl.classList.add('show');
+      $('#pasteUri').style.borderColor = 'var(--danger)';
+      return;
+    }
+    let added = 0, skipped = 0;
+    for(const p of items){
+      if(findDup(p) || base32Decode(p.secret).length < 8){ skipped++; continue; }
+      await addAccount(p, true);
+      added++;
+    }
+    if(added){
+      renderList(); closeModal();
+      toast('已添加 ' + added + ' 个账号' + (skipped || skippedHotp ? '，跳过重复/无效 ' + skipped + (skippedHotp ? '、HOTP ' + skippedHotp : '') : ''));
+    }else{
+      errEl.textContent = skippedHotp ? '没有可添加的账号（另有 ' + skippedHotp + ' 个 HOTP 条目不支持）'
+                                      : (skipped ? '全部跳过：重名或密钥无效' : '没有可添加的账号');
+      errEl.classList.add('show');
+    }
+  });
+}
+
+async function addAccount(p, silent){
+  accounts.push({
+    id: uid(), label: p.label, issuer: p.issuer, secret: p.secret.replace(/[\s-]/g,''),
+    digits: p.digits||6, period: p.period||30, createdAt: Date.now()
+  });
+  await saveAccounts(accounts);
+  if(!silent){
+    renderList();
+    closeModal();
+    toast('已添加：' + displayName(p));
+  }
+}
+
+/* ---------------- 重命名 / 删除 / 二维码 ---------------- */
+function openRenameModal(id){
+  const a = accounts.find(x=>x.id===id); if(!a) return;
+  openModal(
+    '<div class="mhead"><h3>重命名账号</h3><button class="btn ghost" data-close>✕</button></div>'+
+    '<div class="mbody"><form id="rnForm">'+
+      '<div class="field"><label>显示名（可含「平台:账号」格式）</label>'+
+        '<input id="rnName" value="'+esc(displayName(a))+'" autocomplete="off">'+
+        '<div class="ferr" id="err-rn"></div></div>'+
+      '<button type="submit" class="btn primary" style="width:100%;justify-content:center">保存</button>'+
+    '</form></div>'
+  );
+  $('#modal [data-close]').addEventListener('click', closeModal);
+  $('#rnName').focus();
+  $('#rnForm').addEventListener('submit', e=>{
+    e.preventDefault();
+    const raw = $('#rnName').value.trim();
+    const errEl = $('#err-rn'); errEl.classList.remove('show');
+    if(!raw){ errEl.textContent='名称不能为空'; errEl.classList.add('show'); return; }
+    let issuer = '', label = raw;
+    const ci = raw.indexOf(':');
+    if(ci > 0){ issuer = raw.slice(0,ci).trim(); label = raw.slice(ci+1).trim(); }
+    if(!label){ errEl.textContent='冒号后需有账号名'; errEl.classList.add('show'); return; }
+    if(findDup({issuer, label}, id)){ errEl.textContent='与其他账号重名'; errEl.classList.add('show'); return; }
+    a.issuer = issuer; a.label = label;
+    cacheKeyBytes.delete(id); lastCounter.delete(id);
+    saveAccounts(accounts).then(()=>{ renderList(); closeModal(); toast('已重命名为 ' + displayName(a)); });
+  });
+}
+
+function openDeleteModal(id){
+  const a = accounts.find(x=>x.id===id); if(!a) return;
+  openModal(
+    '<div class="mhead"><h3>删除账号</h3><button class="btn ghost" data-close>✕</button></div>'+
+    '<div class="mbody">'+
+      '<div class="danger-zone">确认删除 <b>'+esc(displayName(a))+'</b>？<br>删除后密钥将不可恢复，除非你留有导出备份。</div>'+
+      '<div style="display:flex;justify-content:flex-end;gap:9px">'+
+        '<button class="btn" data-close>取消</button>'+
+        '<button class="btn danger" id="btnDelOk">确认删除</button>'+
+      '</div>'+
+    '</div>'
+  );
+  $('#modal [data-close]').addEventListener('click', closeModal);
+  $('#btnDelOk').addEventListener('click', async ()=>{
+    accounts = accounts.filter(x=>x.id!==id);
+    cacheKeyBytes.delete(id); lastCounter.delete(id);
+    await saveAccounts(accounts);
+    renderList(); closeModal(); toast('已删除');
+  });
+}
+
+function openQrModal(id){
+  const a = accounts.find(x=>x.id===id); if(!a) return;
+  const uri = buildOtpauth(a);
+  let qrHtml = '';
+  if(!window.__qrGenLibFail && typeof qrcode === 'function'){
+    try{
+      const qr = qrcode(0, 'M');
+      qr.addData(uri); qr.make();
+      const n = qr.getModuleCount(), cell = Math.max(3, Math.floor(220/n));
+      qrHtml = '<div class="qrcanvas"><img alt="账号二维码" src="'+qr.createDataURL(cell, 0)+'" width="'+(n*cell)+'"></div>';
+    }catch(e){ qrHtml=''; }
+  }
+  if(!qrHtml) qrHtml = '<div style="font-size:12.5px;color:var(--sub);padding:10px;text-align:center">（二维码组件未加载，请使用下方文本链接）</div>';
+  openModal(
+    '<div class="mhead"><h3>'+esc(displayName(a))+'</h3><button class="btn ghost" data-close>✕</button></div>'+
+    '<div class="mbody">'+
+      qrHtml+
+      '<div class="field uribox"><label>otpauth:// 链接（可用于导入其他验证器）</label>'+
+        '<textarea id="uriText" readonly>'+esc(uri)+'</textarea></div>'+
+      '<button class="btn primary" id="btnCopyUri" style="width:100%;justify-content:center">复制链接</button>'+
+      '<div class="weaknote">⚠️ 该链接包含明文密钥，仅在自己信任的设备间传输。</div>'+
+    '</div>'
+  );
+  $('#modal [data-close]').addEventListener('click', closeModal);
+  $('#btnCopyUri').addEventListener('click', ()=>copyText(uri, '已复制 otpauth 链接'));
+}
+
+/* ---------------- 导出 / 导入 ---------------- */
+function openExportModal(){
+  if(!accounts.length){ toast('暂无账号可导出'); return; }
+  openModal(
+    '<div class="mhead"><h3>导出备份</h3><button class="btn ghost" data-close>✕</button></div>'+
+    '<div class="mbody"><form id="exForm">'+
+      '<div class="banner info show" style="margin-bottom:12px">备份文件包含<strong>明文/加密密钥</strong>，请妥善保管，不要发到群聊或网盘公开目录。</div>'+
+      '<div class="field"><label>备份口令（可选，留空则不加密）</label>'+
+        '<input id="exPass" type="password" placeholder="≥ 8 个字符，AES-256-GCM 加密" autocomplete="new-password">'+
+        '<div class="hint">设置口令后，导入时需输入相同口令；无口令则为明文 JSON</div>'+
+        '<div class="ferr" id="err-ex"></div></div>'+
+      '<button type="submit" class="btn primary" style="width:100%;justify-content:center">导出 '+accounts.length+' 个账号</button>'+
+    '</form></div>'
+  );
+  $('#modal [data-close]').addEventListener('click', closeModal);
+  $('#exForm').addEventListener('submit', async e=>{
+    e.preventDefault();
+    const pass = $('#exPass').value;
+    const errEl = $('#err-ex'); errEl.classList.remove('show');
+    let payload;
+    if(pass){
+      if(pass.length < 8){ errEl.textContent='口令至少 8 个字符'; errEl.classList.add('show'); return; }
+      if(!(window.crypto && crypto.subtle)){ errEl.textContent='当前浏览器不支持加密，请留空口令导出'; errEl.classList.add('show'); return; }
+      const salt = new Uint8Array(16), iv = new Uint8Array(12);
+      crypto.getRandomValues(salt); crypto.getRandomValues(iv);
+      const km = await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']);
+      const key = await crypto.subtle.deriveKey({name:'PBKDF2', salt, iterations:210000, hash:'SHA-256'}, km, {name:'AES-GCM', length:256}, false, ['encrypt']);
+      const data = new TextEncoder().encode(JSON.stringify({app:'totp-authenticator', version:1, accounts}));
+      const ct = new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, data));
+      payload = { app:'totp-authenticator', version:1, encrypted:'AES-256-GCM/PBKDF2', salt:toB64(salt), iv:toB64(iv), data:toB64(ct), exported_at:new Date().toISOString() };
+    }else{
+      payload = { app:'totp-authenticator', version:1, accounts: accounts.map(({id,label,issuer,secret,digits,period})=>({label,issuer,secret,digits,period})), exported_at:new Date().toISOString() };
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const d = new Date(), pad = x=>String(x).padStart(2,'0');
+    const a2 = document.createElement('a');
+    a2.href = url;
+    a2.download = 'totp-backup-' + d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + '.json';
+    document.body.appendChild(a2); a2.click(); a2.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 4000);
+    closeModal();
+    toast('已导出 ' + accounts.length + ' 个账号' + (pass ? '（已加密）' : '（明文）'));
+  });
+}
+
+function openImportModal(){
+  openModal(
+    '<div class="mhead"><h3>导入账号</h3><button class="btn ghost" data-close>✕</button></div>'+
+    '<div class="mbody">'+
+      '<div class="field"><label>选择备份文件（.json）</label><input type="file" id="impFile" accept=".json,application/json"></div>'+
+      '<div class="field"><label>或粘贴备份 JSON / otpauth:// 链接（每行一条）/ Google Authenticator 的 otpauth-migration:// 迁移链接</label>'+
+        '<textarea id="impText" placeholder=\'{"app":"totp-authenticator",...} 或 otpauth://totp/... 或 otpauth-migration://offline?data=...\'></textarea>'+
+        '<div class="ferr" id="err-imp"></div></div>'+
+      '<div class="field" id="impPassWrap" style="display:none"><label>备份口令</label>'+
+        '<input id="impPass" type="password" autocomplete="off"></div>'+
+      '<button class="btn primary" id="btnImpGo" style="width:100%;justify-content:center">开始导入</button>'+
+      '<div class="weaknote">重名账号（平台+账号名相同）将自动跳过，不会覆盖现有条目。</div>'+
+    '</div>'
+  );
+  $('#modal [data-close]').addEventListener('click', closeModal);
+  $('#impFile').addEventListener('change', e=>{
+    const f = e.target.files[0];
+    if(!f) return;
+    const r = new FileReader();
+    r.onload = ()=>{ $('#impText').value = r.result; precheckImport(); };
+    r.readAsText(f);
+  });
+  $('#impText').addEventListener('input', precheckImport);
+
+  function precheckImport(){
+    const t = $('#impText').value.trim();
+    $('#impPassWrap').style.display = /"encrypted"\s*:/.test(t) ? 'block' : 'none';
+  }
+
+  $('#btnImpGo').addEventListener('click', async ()=>{
+    const errEl = $('#err-imp'); errEl.classList.remove('show');
+    const text = $('#impText').value.trim();
+    if(!text){ errEl.textContent='请先选择文件或粘贴内容'; errEl.classList.add('show'); return; }
+    let items = [];
+    try{
+      if(/^otpauth-migration:/i.test(text)){
+        const r = await parseMigration(text);
+        items = r.items;
+        if(r.skippedHotp) toast('已跳过 ' + r.skippedHotp + ' 个 HOTP 条目（仅支持 TOTP）');
+      }else if(text.startsWith('otpauth:')){
+        for(const line of text.split(/[\n\r]+/)){
+          const L = line.trim();
+          if(L) items.push(parseOtpauth(L));
+        }
+      }else{
+        const obj = JSON.parse(text);
+        if(obj.encrypted){
+          const pass = $('#impPass').value;
+          if(!pass){ errEl.textContent='该备份已加密，请输入口令'; errEl.classList.add('show'); $('#impPassWrap').style.display='block'; return; }
+          const km = await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']);
+          const key = await crypto.subtle.deriveKey({name:'PBKDF2', salt:fromB64(obj.salt), iterations:210000, hash:'SHA-256'}, km, {name:'AES-GCM', length:256}, false, ['decrypt']);
+          let pt;
+          try{ pt = await crypto.subtle.decrypt({name:'AES-GCM', iv:fromB64(obj.iv)}, key, fromB64(obj.data)); }
+          catch(e){ errEl.textContent='口令错误或文件损坏（解密失败）'; errEl.classList.add('show'); return; }
+          items = JSON.parse(new TextDecoder().decode(pt)).accounts;
+        }else if(Array.isArray(obj.accounts)){
+          items = obj.accounts;
+        }else if(Array.isArray(obj)){ items = obj; }
+        else throw new Error('无法识别的备份格式');
+      }
+    }catch(err){
+      errEl.textContent = '解析失败：' + (err.message || err); errEl.classList.add('show'); return;
+    }
+    let added = 0, skipped = 0, bad = 0;
+    for(const it of items){
+      try{
+        const p = (it.secret !== undefined) ? { label:String(it.label||'').trim(), issuer:String(it.issuer||'').trim(), secret:String(it.secret), digits:(+it.digits===8?8:6), period:(+it.period>=1 && +it.period<=3600 ? +it.period : 30) } : parseOtpauth(it);
+        if(!p.label && !p.issuer) { bad++; continue; }
+        if(base32Decode(p.secret).length < 8){ bad++; continue; }
+        if(findDup(p)){ skipped++; continue; }
+        accounts.push({ id:uid(), label:p.label, issuer:p.issuer, secret:p.secret.replace(/[\s-]/g,''), digits:p.digits||6, period:p.period||30, createdAt:Date.now() });
+        added++;
+      }catch(e){ bad++; }
+    }
+    await saveAccounts(accounts);
+    renderList(); closeModal();
+    toast('导入完成：新增 ' + added + '，跳过重复 ' + skipped + '，无效 ' + bad);
+  });
+}
+
+/* ---------------- 使用说明 ---------------- */
+function openHelpModal(){
+  openModal(
+    '<div class="mhead"><h3>使用说明</h3><button class="btn ghost" data-close>✕</button></div>'+
+    '<div class="mbody help">'+
+      '<h4>🔐 基本用法</h4>'+
+      '<ol>'+
+        '<li>在需要开启两步验证的平台（GitHub / Google / 阿里云等）选择「验证器 App」，得到 otpauth:// 链接或 Base32 密钥；</li>'+
+        '<li>点「添加账号」→ 粘贴链接，或 <b>手动输入密钥</b>；</li>'+
+        '<li>登录时点击验证码即可复制，30 秒内输入有效；</li>'+
+        '<li>进度环显示剩余秒数，<b>变红表示即将刷新</b>，建议等新码再输。</li>'+
+      '</ol>'+
+      '<h4>📤 导出 / 导入（换设备、备份）</h4>'+
+      '<ul>'+
+        '<li><b>导出</b>：生成 JSON 备份，可设口令（AES-256-GCM 加密）；</li>'+
+        '<li><b>导入</b>：选择备份文件，或粘贴 otpauth:// 链接（每行一条）；</li>'+
+        '<li><b>从 Google Authenticator 迁移</b>：GA「导出账号」得到 <code>otpauth-migration://</code> 链接，直接粘贴到「添加账号」或「导入」即可（HOTP 条目不支持）；</li>'+
+        '<li>重名账号自动跳过，不会覆盖；</li>'+
+        '<li>每个账号的「⋮ → 显示二维码」可生成二维码，供手机验证器扫描迁移。</li>'+
+      '</ul>'+
+      '<h4>⚠️ 常见问题</h4>'+
+      '<ul>'+
+        '<li><b>验证码总不对</b>：多为本机时间不准 → 点此<button class="linkish" onclick="checkTimeSkew(true)">检查时间同步</button>；</li>'+
+        '<li><b>密钥无效</b>：Base32 只含 <code>A–Z</code> 与 <code>2–7</code>，注意 <code>0/1/O/I</code> 多为输入错误。</li>'+
+      '</ul>'+
+      '<h4>🛡️ 安全与隐私</h4>'+
+      '<ul>'+
+        '<li>本页为纯前端单文件应用：<b>无后端、无统计、无上报</b>，密钥只保存在本机浏览器的 localStorage；</li>'+
+        '<li>密钥在本地以明文保存（历史版本曾用设备指纹加密，因浏览器升级/更换设备会导致密钥永久无法读取而移除）；</li>'+
+        '<li>能接触你浏览器配置文件的人即可读到密钥，<b>请定期用口令加密导出备份</b>，并勿将本文件或备份放在公共环境。</li>'+
+      '</ul>'+
+      '<div class="kbd-note">算法实现：SHA-1 / HMAC-SHA1 / Base32 / HOTP（RFC 4226）/ TOTP（RFC 6238），已通过 RFC 官方测试向量验证。</div>'+
+    '</div>'
+  );
+  $('#modal [data-close]').addEventListener('click', closeModal);
+}
+
+/* ---------------- 事件绑定与启动 ---------------- */
+$('#btnAdd').addEventListener('click', openAddModal);
+$('#btnImport').addEventListener('click', openImportModal);
+$('#btnExport').addEventListener('click', openExportModal);
+$('#btnHelp').addEventListener('click', openHelpModal);
+
+$('#list').addEventListener('click', e=>{
+  const copyBtn = e.target.closest('[data-copy]');
+  if(copyBtn){ copyCode(copyBtn.dataset.copy); return; }
+  const menuBtn = e.target.closest('[data-menu]');
+  if(menuBtn){
+    const m = document.getElementById('menu-' + menuBtn.dataset.menu);
+    document.querySelectorAll('.menu.open').forEach(x=>{ if(x!==m) x.classList.remove('open'); });
+    m.classList.toggle('open');
+    e.stopPropagation();
+    return;
+  }
+  const act = e.target.closest('.menu button');
+  if(act){
+    const id = act.closest('.menu').id.replace('menu-','');
+    act.closest('.menu').classList.remove('open');
+    const map = { qr:openQrModal, rename:openRenameModal, del:openDeleteModal, uri:(i)=>copyText(buildOtpauth(accounts.find(a=>a.id===i)), '已复制 otpauth 链接') };
+    map[act.dataset.act](id);
+  }
+});
+document.addEventListener('click', ()=>{
+  document.querySelectorAll('.menu.open').forEach(x=>x.classList.remove('open'));
+});
+
+function copyCode(id){
+  const a = accounts.find(x=>x.id===id); if(!a) return;
+  try{
+    const code = totpAt(keyBytesOf(a), Math.floor(Date.now()/1000), a.period, a.digits);
+    copyText(code, '已复制 ' + displayName(a) + ' 的验证码：' + code);
+  }catch(e){ toast('生成验证码失败：' + e.message); }
+}
+
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) tick(true); });
+
+(async function init(){
+  accounts = await loadAccounts();
+  renderList();
+  if(legacyLocked) $('#legacyBanner').classList.add('show');
+  checkTimeSkew(false);
+})();
+</script>
+</body>
+</html>

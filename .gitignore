@@ -1,0 +1,6 @@
+# 本地运行产物，永不入库
+totp-backup-*.json
+.totp-*.html
+.DS_Store
+__pycache__/
+*.pyc
